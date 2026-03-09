@@ -132,7 +132,6 @@ if gerar:
                 collect_primary_tags_from_first_conversion,
                 classify_primary_from_list,
                 collect_all_tags, cl_historico,
-                parse_intervalo_mensal, parse_intervalo_semanal,
                 build_month_range,
                 gerar_consolidado, gerar_semanais,
                 gerar_auditoria, gerar_validacao,
@@ -153,21 +152,13 @@ if gerar:
             all_tags_source = collect_all_tags(df, cols)
             cl_map = {lid: cl_historico(tags) for lid, tags in all_tags_source.items()}
 
-            # Intervalos — converte date objects para strings no formato esperado
-            MESES_PT = {
-                1:"Janeiro",2:"Fevereiro",3:"Março",4:"Abril",5:"Maio",6:"Junho",
-                7:"Julho",8:"Agosto",9:"Setembro",10:"Outubro",11:"Novembro",12:"Dezembro"
-            }
-            def fmt_mes(d):
-                return f"{MESES_PT[d.month]}/{d.year}"
-            def fmt_dia(d):
-                return d.strftime("%d/%m/%Y")
-
-            str_mensal  = f"{fmt_mes(mes_inicio)} a {fmt_mes(mes_fim)}"
-            str_semanal = f"{fmt_dia(data_inicio_sem)} a {fmt_dia(data_fim_sem)}"
-
-            intervalo_mensal  = parse_intervalo_mensal(str_mensal)
-            intervalo_semanal = parse_intervalo_semanal(str_semanal)
+            # Intervalos — constrói direto com objetos date, sem parsers de string
+            import datetime as _dt
+            intervalo_mensal  = (
+                _dt.date(mes_inicio.year, mes_inicio.month, 1),
+                _dt.date(mes_fim.year,    mes_fim.month,    1),
+            )
+            intervalo_semanal = (data_inicio_sem, data_fim_sem)
             months = build_month_range(*intervalo_mensal)
 
             # Relatório
