@@ -763,13 +763,13 @@ def gerar_arquivo_final(
     ws_sum[f"A{row}"] = "Leads por Tag × Mês"; ws_sum[f"A{row}"].font = BOLD; row += 2
     lead_table_start = row
     for r in dataframe_to_rows(sumario_dict["tabela_leads"], index=False, header=True): ws_sum.append(r)
-    for c in ws_sum.iter_rows(min_row=lead_table_start, max_row=lead_table_start, min_col=1, max_col=ws_sum.max_column)[0]: c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
+    for c in next(ws_sum.iter_rows(min_row=lead_table_start, max_row=lead_table_start, min_col=1, max_col=ws_sum.max_column)): c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
     row = ws_sum.max_row + 2
 
     ws_sum[f"A{row}"] = "MQLs por Tag × Mês"; ws_sum[f"A{row}"].font = BOLD; row += 2
     mql_table_start = row
     for r in dataframe_to_rows(sumario_dict["tabela_mqls"], index=False, header=True): ws_sum.append(r)
-    for c in ws_sum.iter_rows(min_row=mql_table_start, max_row=mql_table_start, min_col=1, max_col=ws_sum.max_column)[0]: c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
+    for c in next(ws_sum.iter_rows(min_row=mql_table_start, max_row=mql_table_start, min_col=1, max_col=ws_sum.max_column)): c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
     row = ws_sum.max_row + 2
 
     ws_sum[f"A{row}"] = "Conversão (%) por Tag × Mês"; ws_sum[f"A{row}"].font = BOLD; row += 2
@@ -779,7 +779,7 @@ def gerar_arquivo_final(
     for rr in range(conv_table_start + 1, conv_table_start + 1 + len(sumario_dict["tabela_conversao"])):
         for cc in range(2, n_cols_conv + 1):
             ws_sum.cell(row=rr, column=cc).number_format = "0.0%"
-    for c in ws_sum.iter_rows(min_row=conv_table_start, max_row=conv_table_start, min_col=1, max_col=ws_sum.max_column)[0]: c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
+    for c in next(ws_sum.iter_rows(min_row=conv_table_start, max_row=conv_table_start, min_col=1, max_col=ws_sum.max_column)): c.font = BOLD; c.fill = FILL_HEADER; c.alignment = CENTER
 
     auto_adjust(ws_sum)
 
