@@ -92,6 +92,24 @@ with col4:
         key="sem_fim"
     )
 
+DIAS_SEMANA = {
+    "Domingo (padrão)"  : 6,
+    "Segunda-feira"     : 0,
+    "Terça-feira"       : 1,
+    "Quarta-feira"      : 2,
+    "Quinta-feira"      : 3,
+    "Sexta-feira"       : 4,
+    "Sábado"            : 5,
+}
+dia_inicio_label = st.selectbox(
+    "Dia de início de cada semana",
+    options=list(DIAS_SEMANA.keys()),
+    index=0,
+    help="Escolha qual dia marca o começo de cada semana no relatório. "
+         "O padrão histórico é Domingo → Sábado.",
+)
+inicio_semana = DIAS_SEMANA[dia_inicio_label]
+
 st.divider()
 
 # ── Nome do arquivo de saída ──────────────────────────────────
@@ -163,7 +181,7 @@ if gerar:
 
             # Relatório
             consolidado   = gerar_consolidado(df, primary_map, cl_map, months)
-            abas_semanais = gerar_semanais(df, primary_map, cl_map, intervalo_mensal, intervalo_semanal)
+            abas_semanais = gerar_semanais(df, primary_map, cl_map, intervalo_mensal, intervalo_semanal, inicio_semana)
             auditoria_df, descartes = gerar_auditoria(df, cols, primary_map, cl_map, intervalo_mensal)
             validacao_df  = gerar_validacao(consolidado, abas_semanais)
             sumario_dict  = gerar_sumario(consolidado)
