@@ -266,18 +266,31 @@ def build_month_range(start_month: dt.date, end_month: dt.date) -> List[dt.date]
 
 
 def build_weeks_dom_sab(start_date: dt.date, end_date: dt.date) -> List[Tuple[dt.date, dt.date]]:
-    delta = start_date.weekday()  # Mon=0..Sun=6
-    if delta != 6:
-        start = start_date - dt.timedelta(days=delta + 1)
-    else:
-        start = start_date
+    """Mantido por compatibilidade — semanas Dom→Sab (inicio_semana=6)."""
+    return build_weeks_custom(start_date, end_date, inicio_semana=6)
+
+
+def build_weeks_custom(
+    start_date: dt.date,
+    end_date: dt.date,
+    inicio_semana: int = 6,
+) -> List[Tuple[dt.date, dt.date]]:
+    """Gera semanas de 7 dias com início no dia da semana indicado.
+
+    inicio_semana: 0=Segunda, 1=Terça, 2=Quarta, 3=Quinta,
+                   4=Sexta, 5=Sábado, 6=Domingo  (padrão original).
+    """
+    # weekday() retorna 0=Seg … 6=Dom
+    current_wd = start_date.weekday()
+    # Quantos dias precisamos voltar para chegar ao início da semana desejado?
+    delta = (current_wd - inicio_semana) % 7
+    start = start_date - dt.timedelta(days=delta)
+
     weeks: List[Tuple[dt.date, dt.date]] = []
     cur = start
     while cur <= end_date:
-        w_start = cur
-        w_end = cur + dt.timedelta(days=6)
-        weeks.append((w_start, w_end))
-        cur = cur + dt.timedelta(days=7)
+        weeks.append((cur, cur + dt.timedelta(days=6)))
+        cur += dt.timedelta(days=7)
     return weeks
 
 
@@ -456,10 +469,15 @@ def gerar_semanais(
     cl_map: Dict[str, str],
     intervalo_mensal: Tuple[dt.date, dt.date],
     intervalo_semanal: Tuple[dt.date, dt.date],
+    inicio_semana: int = 6,
 ) -> Dict[str, pd.DataFrame]:
+    """Gera as abas semanais por mês.
+
+    inicio_semana: 0=Segunda … 6=Domingo (padrão original Dom→Sab).
+    """
     start_m, end_m = intervalo_mensal
     months = build_month_range(start_m, end_m)
-    weeks_global = build_weeks_dom_sab(*intervalo_semanal)
+    weeks_global = build_weeks_custom(*intervalo_semanal, inicio_semana=inicio_semana)
     abas: Dict[str, pd.DataFrame] = {}
     for m in months:
         nome = month_name_pt(m.year, m.month)
