@@ -127,6 +127,8 @@ def map_columns(df: pd.DataFrame) -> Dict[str, Optional[str]]:
         "email": fuzzy_match(cols, "email"),
         "telefone": fuzzy_match(cols, "telefone"),
         "nome": fuzzy_match(cols, "nome"),
+        "eventos": fuzzy_match(cols, "eventos"),
+        "total_conversoes": fuzzy_match(cols, "total de conversoes"),
     }
 
 
@@ -208,16 +210,34 @@ def collect_all_tags(df: pd.DataFrame, cols: Dict[str, Optional[str]]) -> Dict[s
     return tag_map
 
 
+PRIMARY_PRIORITY_SET = set(PRIMARY_PRIORITY_NORMALIZED)
+
+
 def classify_primary_from_list(tag_list: List[str]) -> str:
+    """
+    Retorna a tag de produto correspondente à PRIMEIRA INCIDÊNCIA de tag de
+    produto no campo Tags do lead.
+
+    O campo Tags do RD Station é preenchido na ordem em que as tags foram
+    aplicadas ao lead: a primeira à esquerda é a mais antiga, a última à
+    direita é a mais recente. Por isso a classificação percorre tags_norm
+    (a lista do PRÓPRIO lead, na ordem em que ela vem) da esquerda para a
+    direita, e retorna a primeira tag que for uma tag de produto conhecida
+    (está em PRIMARY_PRIORITY_SET ou começa com "leads farmtell views").
+
+    IMPORTANTE: isto é diferente de percorrer PRIMARY_PRIORITY_NORMALIZED
+    (que definiria uma ordem de PRIORIDADE de produto, não a ordem real de
+    aplicação da tag no lead). A versão anterior desta função iterava sobre
+    PRIMARY_PRIORITY_NORMALIZED e por isso ignorava a posição das tags no
+    campo do lead - retornando sempre o produto de maior prioridade entre
+    os presentes, mesmo que ele não fosse o primeiro aplicado ao lead.
+    """
     tags_norm = [normalize_text(t) for t in tag_list]
-    # Caso especial: qualquer tag que COMEÇA com "leads farmtell views"
     for t in tags_norm:
         if t.startswith("leads farmtell views"):
             return "Leads FarmTell Views"
-    # Ordem prioritária
-    for pri in PRIMARY_PRIORITY_NORMALIZED:
-        if pri in tags_norm:
-            return canonicalize_primary_label(pri)
+        if t in PRIMARY_PRIORITY_SET:
+            return canonicalize_primary_label(t)
     return "Sem Tag de Produto"
 
 
@@ -231,6 +251,116 @@ def cl_historico(all_tags: List[str]) -> str:
         if "leads corte" in t or "lead corte" in t:
             return "Leads Corte"
     return ""
+
+# ============================================================
+# --------- FALLBACK: SUGESTÃO DE PRODUTO PELO EVENTO --------
+# ============================================================
+# Usado SOMENTE como auditoria/visibilidade para leads que caíram em
+# "Sem Tag de Produto". NÃO altera a contagem oficial de Leads/MQL,
+# que continua 100% baseada na tag (agora que a automação no RD Station
+# foi corrigida na plataforma). Serve para expor, principalmente em
+# dados históricos anteriores ao conserto, quais leads sem tag têm um
+# evento de conversão que indica claramente um produto.
+#
+# IMPORTANTE sobre a ordem do campo "Eventos (Últimos 100)": ele vem do
+# mais NOVO para o mais ANTIGO (o primeiro item da esquerda é o evento
+# mais recente do lead; o último item à direita é o mais antigo/primeiro
+# evento real). Por isso, para achar o PRIMEIRO evento do lead, pegamos
+# o ÚLTIMO item da lista após o split por " / ".
+
+EVENTO_PRODUTO_KEYWORDS: List[Tuple[str, str]] = [
+    # Ordem importa: do mais específico para o mais genérico.
+    ("BEEF-SMART", "Leads FarmTell Beef Smart"),
+    ("BEEF SMART", "Leads FarmTell Beef Smart"),
+    ("BEEF-NEW", "Ft New Beef"),
+    ("NEW BEEF", "Ft New Beef"),
+    ("BEEF", "Leads FarmTell Beef"),
+    ("MILK", "Leads FarmTell Milk"),
+    ("VIEWS", "Leads FarmTell Views"),
+    ("MILLS", "Leads FarmTell Mills"),
+    ("CONSULTORIA", "Leads Consultoria Online (indefinido pelo evento)"),
+    ("PPD", "Leads PPD (indefinido pelo evento)"),
+]
+
+
+def extrair_primeiro_evento_real(eventos_cell) -> str:
+    """
+    Retorna o PRIMEIRO evento real do lead (o mais antigo), respeitando
+    que o campo "Eventos (Últimos 100)" vem do mais novo -> mais antigo.
+    """
+    if pd.isna(eventos_cell) or not str(eventos_cell).strip():
+        return ""
+    itens = [e.strip() for e in str(eventos_cell).split("/") if e.strip()]
+    if not itens:
+        return ""
+    return itens[-1]  # último da lista = mais antigo = primeiro evento real
+
+
+def sugerir_produto_por_evento(evento: str) -> str:
+    if not evento:
+        return ""
+    e = normalize_text(evento).upper()
+    for kw, produto in EVENTO_PRODUTO_KEYWORDS:
+        if kw in e:
+            return produto
+    return ""
+
+
+def gerar_auditoria_fallback_evento(
+    df: pd.DataFrame,
+    cols: Dict[str, Optional[str]],
+    primary_map: Dict[str, str],
+    intervalo_mensal: Optional[Tuple[dt.date, dt.date]] = None,
+) -> pd.DataFrame:
+    """
+    Para cada lead classificado como "Sem Tag de Produto", verifica se o
+    primeiro evento real (mais antigo) do lead indica um produto
+    conhecido. Retorna um DataFrame só com os casos onde há sugestão —
+    ou seja, leads potencialmente afetados por falha de tagueamento
+    (histórica, sobretudo antes da correção feita na plataforma RD).
+    """
+    if not cols.get("eventos"):
+        return pd.DataFrame(columns=[
+            "Email", "Nome", "Data 1ª Conversão", "Primeiro Evento Real",
+            "Produto sugerido pelo evento", "Tag atual",
+        ])
+
+    linhas = []
+    g_first = (
+        df.dropna(subset=["primeira_conv"])
+        .sort_values("primeira_conv")
+        .groupby("lead_id", as_index=False)
+        .first()
+    )
+
+    if intervalo_mensal is not None:
+        ini, fim = intervalo_mensal
+        mask = (g_first["primeira_conv"] >= pd.Timestamp(ini)) & (
+            g_first["primeira_conv"] <= pd.Timestamp(dt.datetime.combine(fim, dt.time(23, 59, 59)))
+        )
+        g_first = g_first.loc[mask]
+
+    for _, row in g_first.iterrows():
+        lid = row["lead_id"]
+        if primary_map.get(lid, "Sem Tag de Produto") != "Sem Tag de Produto":
+            continue
+        primeiro_evento = extrair_primeiro_evento_real(row.get(cols["eventos"], ""))
+        sugestao = sugerir_produto_por_evento(primeiro_evento)
+        if not sugestao:
+            continue
+        linhas.append({
+            "Email": row.get(cols["email"], "") if cols.get("email") else "",
+            "Nome": row.get(cols["nome"], "") if cols.get("nome") else "",
+            "Data 1ª Conversão": row["primeira_conv"],
+            "Primeiro Evento Real": primeiro_evento,
+            "Produto sugerido pelo evento": sugestao,
+            "Tag atual": "Sem Tag de Produto",
+        })
+
+    out = pd.DataFrame(linhas)
+    if not out.empty:
+        out = out.sort_values("Data 1ª Conversão")
+    return out
 
 # ============================================================
 # ------------------------- MQL MAP --------------------------
@@ -748,6 +878,30 @@ def criar_graficos_sumario(ws, lead_table_start: int, tab_leads: pd.DataFrame,
     ws.add_chart(ch3, f"A{conv_table_start + len(tab_conv) + 22}")
 
 
+def escrever_auditoria_fallback(ws, df_fb: pd.DataFrame):
+    if df_fb.empty:
+        ws["A1"] = "Nenhum lead 'Sem Tag de Produto' com evento indicando produto neste recorte."
+        ws["A1"].font = BOLD
+        return
+    df_fb = df_fb.copy()
+    df_fb["Data 1ª Conversão"] = df_fb["Data 1ª Conversão"].dt.strftime("%d/%m/%Y %H:%M")
+    write_df(ws, df_fb)
+    RED = PatternFill("solid", fgColor="FFC7CE")
+    for r in range(2, ws.max_row + 1):
+        for c in range(1, ws.max_column + 1):
+            ws.cell(row=r, column=c).fill = RED
+    ws.freeze_panes = "A2"
+    auto_adjust(ws)
+    start = ws.max_row + 2
+    ws[f"A{start}"] = (
+        "Nota: contagem de Leads/MQL não é alterada por esta aba. "
+        "É apenas uma auditoria para visibilidade de gaps de tagueamento "
+        "(sobretudo histórico, anterior à correção feita na plataforma RD Station). "
+        "'Indefinido pelo evento' = o nome do evento não permite saber se é Corte ou Leite."
+    )
+    ws[f"A{start}"].font = Font(italic=True)
+
+
 def gerar_arquivo_final(
     consolidado: pd.DataFrame,
     abas_semanais: Dict[str, pd.DataFrame],
@@ -756,6 +910,7 @@ def gerar_arquivo_final(
     validacao_df: pd.DataFrame,
     sumario_dict: Dict[str, pd.DataFrame],
     nome_arquivo: str,
+    auditoria_fallback_df: Optional[pd.DataFrame] = None,
 ):
     wb = Workbook(); wb.remove(wb.active)
 
@@ -765,6 +920,10 @@ def gerar_arquivo_final(
         ws = wb.create_sheet(nome); escrever_aba_semanal(ws, df_sem)
 
     ws_aud = wb.create_sheet("Auditoria"); escrever_auditoria(ws_aud, auditoria_df, descartes)
+
+    if auditoria_fallback_df is not None:
+        ws_fb = wb.create_sheet("Auditoria - Tag Ausente")
+        escrever_auditoria_fallback(ws_fb, auditoria_fallback_df)
 
     ws_val = wb.create_sheet("Validação"); write_df(ws_val, validacao_df); ws_val.freeze_panes = "A2"
     for r in range(2, ws_val.max_row + 1):
@@ -885,8 +1044,16 @@ def main():
     # 9) Sumário (tabelas + gráficos no writer)
     sumario_dict = gerar_sumario(consolidado)
 
+    # 9.5) Auditoria fallback: leads "Sem Tag de Produto" cujo evento indica produto
+    # (usa intervalo_semanal pois é o range de datas exato solicitado pelo usuário;
+    # intervalo_mensal é só um "seletor de mês", não um range preciso de dias)
+    auditoria_fallback_df = gerar_auditoria_fallback_evento(df, cols, primary_map, intervalo_mensal=intervalo_semanal)
+
     # 10) Excel final
-    gerar_arquivo_final(consolidado, abas_semanais, auditoria_df, descartes, validacao_df, sumario_dict, args.saida)
+    gerar_arquivo_final(
+        consolidado, abas_semanais, auditoria_df, descartes, validacao_df, sumario_dict, args.saida,
+        auditoria_fallback_df=auditoria_fallback_df,
+    )
 
     print(f"Arquivo gerado: {args.saida}")
 
